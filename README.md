@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Dox2** is a comprehensive PDF management application built with Python and Tkinter. It provides a modern, user-friendly interface with a pleasing light blue and white theme, similar to Adobe Acrobat DC.
+**Dox2** is a comprehensive PDF management application built with Python and Tkinter. It provides a modern, user-friendly interface with a pleasing light blue and white theme.
 
 ## Features
 
@@ -234,15 +234,7 @@ We welcome contributions! Please:
 
 ## License
 
-Dox2 is open-source software. Check LICENSE file for details.
 
-## Support
-
-For issues, questions, or suggestions:
-1. Check the QUICKSTART.md guide
-2. Review troubleshooting section
-3. Open an issue on GitHub
-4. Contact support team
 
 ## Version History
 
@@ -276,5 +268,3 @@ For issues, questions, or suggestions:
 ---
 
 **Enjoy using Dox2!** 📄✨
-
-For more information, visit the project repository or documentation.
