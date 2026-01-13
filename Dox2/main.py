@@ -33,9 +33,11 @@ class Dox2Application:
         self.root.geometry("1000x700")
         self.root.minsize(700, 500)
         
-        # Set application icon (if available)
+        # Set application icon
         try:
-            self.root.iconbitmap('assets/dox2.ico')
+            icon_path = os.path.join(os.path.dirname(__file__), 'assets', 'Images', 'D2_logo_48.ico')
+            if os.path.exists(icon_path):
+                self.root.iconbitmap(icon_path)
         except:
             pass
         

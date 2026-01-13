@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.ui_components import (
-    StyledFrame, StyledLabel, StyledButton, SectionFrame, StatusBar,
+    StyledFrame, StyledLabel, StyledButton, SectionFrame, StatusBar, ScrolledFrame,
     show_info_dialog, show_error_dialog,
     LIGHT_BLUE, DARK_BLUE, WHITE, DARK_GRAY
 )
@@ -44,6 +44,33 @@ class FileManager(StyledFrame):
             except Exception as e:
                 print(f"Error loading custom folders: {e}")
     
+    def refresh_custom_folders(self):
+        """Refresh custom folder buttons when tab is switched"""
+        # Load the latest custom folders from file
+        self._load_custom_folders()
+        
+        # Clear existing custom folder buttons
+        for folder_path, (btn_frame, _, _) in list(self.folder_buttons.items()):
+            btn_frame.destroy()
+        
+        self.folder_buttons.clear()
+        self.folder_delete_buttons.clear()
+        self.show_delete_buttons = False
+        
+        # Reload custom folder buttons from the updated list
+        for folder_path in self.custom_folders:
+            if os.path.isdir(folder_path):
+                folder_name = os.path.basename(folder_path)
+                self._add_custom_folder_button(folder_path, folder_name)
+        
+        # Update manage delete button visibility
+        self._update_manage_delete_button_visibility()
+        
+        # Update canvas scroll region
+        self.nav_buttons_frame.update_idletasks()
+        self.nav_canvas.config(scrollregion=self.nav_canvas.bbox('all'))
+        self._update_scrollbar_visibility()
+    
     def _save_custom_folders(self):
         """Save custom folder shortcuts to config file"""
         config_file = Path.home() / ".dox2_folders.txt"
@@ -56,21 +83,22 @@ class FileManager(StyledFrame):
     
     def _setup_ui(self):
         """Setup UI components"""
-        # Main container
-        main_frame = StyledFrame(self)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Use ScrolledFrame for proper scrolling
+        scrolled = ScrolledFrame(self)
+        scrolled.pack(fill=tk.BOTH, expand=True)
+        main_frame = scrolled.scrollable_frame
         
-        # ---- Navigation Section with Horizontal Scroll ----
+        # ---- Navigation Section with Smart Scrolling ----
         nav_section = SectionFrame(main_frame, title="Navigation")
-        nav_section.pack(fill=tk.X, pady=(0, 10))
+        nav_section.pack(fill=tk.BOTH, expand=False, pady=(0, 10))
         
         # Create a canvas with horizontal scrollbar for navigation buttons
         nav_canvas_frame = tk.Frame(nav_section.content, bg=WHITE)
         nav_canvas_frame.pack(fill=tk.X, pady=(0, 5))
         
-        # Horizontal scrollbar
-        h_scrollbar = tk.Scrollbar(nav_canvas_frame, orient=tk.HORIZONTAL)
-        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+        # Horizontal scrollbar (will be hidden if not needed)
+        self.h_scrollbar = tk.Scrollbar(nav_canvas_frame, orient=tk.HORIZONTAL)
+        self.h_scrollbar_id = None  # Track if scrollbar is packed
         
         # Canvas for buttons
         self.nav_canvas = tk.Canvas(
@@ -78,10 +106,10 @@ class FileManager(StyledFrame):
             bg=WHITE,
             highlightthickness=0,
             height=45,
-            xscrollcommand=h_scrollbar.set
+            xscrollcommand=self._on_scrollbar_update
         )
         self.nav_canvas.pack(side=tk.TOP, fill=tk.X)
-        h_scrollbar.config(command=self.nav_canvas.xview)
+        self.h_scrollbar.config(command=self.nav_canvas.xview)
         
         # Frame inside canvas to hold buttons
         self.nav_buttons_frame = tk.Frame(self.nav_canvas, bg=WHITE)
@@ -100,19 +128,29 @@ class FileManager(StyledFrame):
         
         # Store folder buttons for management
         self.folder_buttons = {}  # {folder_path: button_widget}
+        self.folder_delete_buttons = {}  # {folder_path: delete_button}
+        self.show_delete_buttons = False  # Toggle for delete button visibility
         
-        # Load previously saved custom folders
+        # Create control buttons frame (at extreme right)
+        self.control_buttons_frame = tk.Frame(self.nav_buttons_frame, bg=WHITE)
+        self.control_buttons_frame.pack(side=tk.RIGHT, padx=(3, 0))
+        
+        # Add plus button (green +) for adding custom folders
+        self._create_add_folder_button()
+        
+        # Add minus button for managing custom folders (only show if there are custom folders)
+        self._create_manage_delete_button()
+        
+        # Load previously saved custom folders AFTER manage_delete_btn is created
         for folder_path in self.custom_folders:
             if os.path.isdir(folder_path):
                 folder_name = os.path.basename(folder_path)
                 self._add_custom_folder_button(folder_path, folder_name)
         
-        # Add plus button (green +) for adding custom folders
-        self._create_add_folder_button()
-        
-        # Update canvas scroll region
+        # Update canvas scroll region and check if scrollbar is needed
         self.nav_buttons_frame.update_idletasks()
         self.nav_canvas.config(scrollregion=self.nav_canvas.bbox('all'))
+        self._update_scrollbar_visibility()
         
         # Path label
         path_label = StyledLabel(nav_section.content, text="Current Path:")
@@ -155,7 +193,7 @@ class FileManager(StyledFrame):
         
         # ---- File Operations Section ----
         ops_section = SectionFrame(main_frame, title="File Operations")
-        ops_section.pack(fill=tk.X)
+        ops_section.pack(fill=tk.BOTH, expand=False, pady=(0, 10))
         
         # Operation buttons
         button_frame = tk.Frame(ops_section.content, bg=WHITE)
@@ -164,21 +202,24 @@ class FileManager(StyledFrame):
         open_btn = StyledButton(
             button_frame,
             text="Open",
-            command=self._open_file
+            command=self._open_file,
+            pady=10
         )
         open_btn.pack(side=tk.LEFT, padx=5)
         
         info_btn = StyledButton(
             button_frame,
             text="Info",
-            command=self._show_file_info
+            command=self._show_file_info,
+            pady=10
         )
         info_btn.pack(side=tk.LEFT, padx=5)
         
         copy_path_btn = StyledButton(
             button_frame,
             text="Copy Path",
-            command=self._copy_file_path
+            command=self._copy_file_path,
+            pady=10
         )
         copy_path_btn.pack(side=tk.LEFT, padx=5)
         
@@ -249,9 +290,9 @@ class FileManager(StyledFrame):
     def _create_add_folder_button(self):
         """Create the add folder button (green + on light blue background)"""
         add_btn = tk.Button(
-            self.nav_buttons_frame,
+            self.control_buttons_frame,
             text="+",
-            font=('Segoe UI', 14, 'bold'),
+            font=('Segoe UI', 11, 'bold'),
             bg='#E8F4F8',  # Light blue background
             fg='#2ECC71',  # Green plus sign
             activebackground='#D0E8F0',
@@ -264,8 +305,69 @@ class FileManager(StyledFrame):
             pady=4,
             command=self._add_custom_folder
         )
-        add_btn.pack(side=tk.LEFT, padx=3)
+        add_btn.pack(side=tk.RIGHT, padx=(0, 3))
         self.add_folder_btn = add_btn
+    
+    def _create_manage_delete_button(self):
+        """Create the manage delete button (red minus on right side)"""
+        # Create button - will show/hide based on custom folders
+        self.manage_delete_btn = tk.Button(
+            self.control_buttons_frame,
+            text="−",
+            font=('Segoe UI', 11, 'bold'),
+            bg='#E74C3C',  # Red background
+            fg=WHITE,
+            activebackground='#C0392B',
+            relief=tk.FLAT,
+            padx=8,
+            pady=4,
+            command=self._toggle_delete_buttons
+        )
+        self._update_manage_delete_button_visibility()
+    
+    def _toggle_delete_buttons(self):
+        """Toggle visibility of delete buttons on custom folders"""
+        self.show_delete_buttons = not self.show_delete_buttons
+        for folder_path, delete_btn in self.folder_delete_buttons.items():
+            if self.show_delete_buttons:
+                delete_btn.pack(side=tk.RIGHT, padx=(1, 0))
+            else:
+                delete_btn.pack_forget()
+    
+    def _update_manage_delete_button_visibility(self):
+        """Show/hide the manage delete button based on custom folders"""
+        if len(self.custom_folders) > 0:
+            if not self.manage_delete_btn.winfo_manager():  # Only pack if not already packed
+                self.manage_delete_btn.pack(side=tk.RIGHT, padx=(1, 0))
+        else:
+            self.manage_delete_btn.pack_forget()
+    
+    def _update_scrollbar_visibility(self):
+        """Show/hide scrollbar and adjust canvas based on content width"""
+        self.nav_buttons_frame.update_idletasks()
+        canvas_width = self.nav_canvas.winfo_width()
+        scrollregion = self.nav_canvas.bbox('all')
+        
+        if scrollregion:
+            content_width = scrollregion[2] - scrollregion[0]
+            
+            # If content fits in canvas, hide scrollbar
+            if content_width <= canvas_width:
+                self.h_scrollbar.pack_forget()
+                self.h_scrollbar_id = None
+            else:
+                # Show scrollbar if not already visible
+                if self.h_scrollbar_id is None:
+                    self.h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+                    self.h_scrollbar_id = True
+        
+        self.nav_canvas.config(scrollregion=scrollregion)
+    
+    def _on_scrollbar_update(self, *args):
+        """Handle scrollbar updates and manage visibility"""
+        self.h_scrollbar.set(*args)
+        # Schedule visibility check after a short delay
+        self.after(100, self._update_scrollbar_visibility)
     
     def _add_custom_folder(self):
         """Add a custom folder to shortcuts"""
@@ -289,7 +391,7 @@ class FileManager(StyledFrame):
                 show_info_dialog("Info", "Folder already added")
     
     def _add_custom_folder_button(self, folder_path, folder_name):
-        """Add a button for custom folder with delete option"""
+        """Add a button for custom folder with hidden delete option"""
         # Create frame for button and delete button
         btn_frame = tk.Frame(self.nav_buttons_frame, bg=WHITE)
         btn_frame.pack(side=tk.LEFT, padx=2)
@@ -310,11 +412,11 @@ class FileManager(StyledFrame):
         )
         folder_btn.pack(side=tk.LEFT)
         
-        # Delete button (red minus)
+        # Delete button (red minus) - initially hidden, shown when manage delete button is clicked
         del_btn = tk.Button(
             btn_frame,
             text="−",
-            font=('Segoe UI', 12, 'bold'),
+            font=('Segoe UI', 11, 'bold'),
             bg='#E74C3C',  # Red background
             fg=WHITE,
             activebackground='#C0392B',
@@ -323,14 +425,19 @@ class FileManager(StyledFrame):
             pady=4,
             command=lambda: self._remove_custom_folder(folder_path, btn_frame)
         )
-        del_btn.pack(side=tk.LEFT, padx=(1, 0))
+        # Store button but don't pack it yet
+        self.folder_delete_buttons[folder_path] = del_btn
         
         # Store button reference
         self.folder_buttons[folder_path] = (btn_frame, folder_btn, del_btn)
         
-        # Update canvas scroll region
+        # Update visibility of manage delete button
+        self._update_manage_delete_button_visibility()
+        
+        # Update canvas scroll region and check if scrollbar is needed
         self.nav_buttons_frame.update_idletasks()
         self.nav_canvas.config(scrollregion=self.nav_canvas.bbox('all'))
+        self._update_scrollbar_visibility()
     
     def _navigate_to_folder(self, folder_path):
         """Navigate to a custom folder"""
@@ -345,6 +452,10 @@ class FileManager(StyledFrame):
                 if folder_path in self.folder_buttons:
                     self.folder_buttons[folder_path][0].destroy()
                     del self.folder_buttons[folder_path]
+                if folder_path in self.folder_delete_buttons:
+                    del self.folder_delete_buttons[folder_path]
+                self.show_delete_buttons = False
+                self._update_manage_delete_button_visibility()
     
     def _remove_custom_folder(self, folder_path, btn_frame):
         """Remove custom folder button"""
@@ -353,12 +464,19 @@ class FileManager(StyledFrame):
             btn_frame.destroy()
             if folder_path in self.folder_buttons:
                 del self.folder_buttons[folder_path]
+            if folder_path in self.folder_delete_buttons:
+                del self.folder_delete_buttons[folder_path]
             self._save_custom_folders()
             self.status_bar.set_status(f"Removed folder shortcut")
+            
+            # Reset delete button state and hide if no custom folders
+            self.show_delete_buttons = False
+            self._update_manage_delete_button_visibility()
         
-        # Update canvas scroll region
+        # Update canvas scroll region and check if scrollbar is needed
         self.nav_buttons_frame.update_idletasks()
         self.nav_canvas.config(scrollregion=self.nav_canvas.bbox('all'))
+        self._update_scrollbar_visibility()
     
     def _on_nav_scroll(self, event):
         """Handle scrolling in navigation canvas"""

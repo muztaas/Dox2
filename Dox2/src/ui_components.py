@@ -348,13 +348,20 @@ class ScrolledFrame(tk.Frame):
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.scrollable_frame = tk.Frame(self.canvas, bg=WHITE)
         
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        )
+        # Create window on canvas
+        self.window_id = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        # Update canvas scroll region and width when frame changes
+        def on_frame_configure(e):
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            # Make scrollable_frame width match canvas width
+            self.canvas.itemconfig(self.window_id, width=self.canvas.winfo_width())
+        
+        self.scrollable_frame.bind("<Configure>", on_frame_configure)
         self.canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Bind canvas resize to update scrollable_frame width
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfig(self.window_id, width=e.width))
         
         self.canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -378,6 +385,52 @@ def show_warning_dialog(title, message):
 def show_confirmation_dialog(title, message):
     """Show confirmation dialog"""
     return messagebox.askyesno(title, message)
+
+
+def show_password_dialog(attempt_number, max_attempts):
+    """Show password input dialog for password-protected PDFs
+    
+    Args:
+        attempt_number: Current attempt number (1-based)
+        max_attempts: Maximum number of attempts allowed
+    
+    Returns:
+        Tuple of (password, accepted) where accepted is True if user entered password, False if Cancel
+    """
+    from tkinter import simpledialog
+    
+    # Create a temporary root for the dialog
+    temp_root = tk.Tk()
+    temp_root.withdraw()
+    temp_root.attributes('-topmost', True)
+    
+    # Set dialog icon
+    try:
+        icon_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'Images', 'D2_logo_32.ico')
+        if os.path.exists(icon_path):
+            temp_root.iconbitmap(icon_path)
+    except:
+        pass
+    
+    try:
+        # Show password prompt using simpledialog
+        message = f"This PDF is password protected.\nEnter password to open (Attempt {attempt_number}/{max_attempts})"
+        
+        password = simpledialog.askstring(
+            "Password Protected PDF",
+            message,
+            show='*',
+            parent=temp_root
+        )
+        
+        temp_root.destroy()
+        
+        if password is None:
+            return None, False
+        return password, True
+    except Exception as e:
+        temp_root.destroy()
+        return None, False
 
 
 # Theme configuration for ttk widgets

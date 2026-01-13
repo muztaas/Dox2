@@ -10,6 +10,7 @@ from PIL import Image, ImageTk
 import io
 import sys
 import os
+import webbrowser
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.utils import render_page_with_fallback, get_page_size, get_page_text
 from src.ui_components import (
     StyledFrame, StyledLabel, StyledButton, StatusBar,
+    show_password_dialog, show_error_dialog,
     LIGHT_BLUE, DARK_BLUE, WHITE, DARK_GRAY
 )
 
@@ -47,6 +49,16 @@ class PDFReader(StyledFrame):
         self.last_navigation_page = -1  # Track which page we last navigated to
         self.scroll_direction = None  # Track scroll direction (up/down)
         
+        # Password protection handling
+        self.pending_filepath = None  # File waiting for password
+        self.password_attempt_count = 0
+        self.max_password_attempts = 20
+        self.password_input_widget = None  # Reference to password input frame
+        self.is_closing = False  # Flag to prevent dialogs during shutdown
+        
+        # Bookmarks and links
+        self.links_on_page = {}  # Dictionary of links per page
+        
         # Setup UI
         self._setup_ui()
         
@@ -59,6 +71,9 @@ class PDFReader(StyledFrame):
         self.canvas.bind('<Shift-MouseWheel>', self._on_canvas_h_scroll)
         self.canvas.bind('<Shift-Button-4>', self._on_canvas_h_scroll)  # Linux shift scroll
         self.canvas.bind('<Shift-Button-5>', self._on_canvas_h_scroll)  # Linux shift scroll
+        
+        # Bind click for link detection
+        self.canvas.bind('<Button-1>', self._on_canvas_click)
         
         self.canvas.bind('<Configure>', self._on_canvas_configure)
     
@@ -210,16 +225,264 @@ class PDFReader(StyledFrame):
         if filepath:
             self.load_pdf(filepath)
     
+    def _extract_links_for_page(self, page_num):
+        """Extract links from a specific page"""
+        if not self.doc or page_num >= self.total_pages or page_num < 0:
+            return
+        
+        if page_num not in self.links_on_page:
+            self.links_on_page[page_num] = []
+        else:
+            return  # Already extracted
+        
+        page = self.doc[page_num]
+        
+        try:
+            # Get all links on the page
+            for link in page.get_links():
+                if link['type'] == 'uri':  # External link
+                    self.links_on_page[page_num].append({
+                        'type': 'external',
+                        'uri': link['uri'],
+                        'rect': link['from']
+                    })
+                elif link['type'] == 'goto':  # Internal link
+                    self.links_on_page[page_num].append({
+                        'type': 'internal',
+                        'page': link.get('page', 0),
+                        'rect': link['from']
+                    })
+        except:
+            pass
+    
+    def _on_canvas_click(self, event):
+        """Handle click on canvas - check for links"""
+        if self.current_page not in self.links_on_page or not self.links_on_page[self.current_page]:
+            return
+        
+        # Get canvas coordinates
+        canvas_x = self.canvas.canvasx(event.x)
+        canvas_y = self.canvas.canvasy(event.y)
+        
+        # Get page position
+        if self.current_page not in self.page_positions:
+            return
+        
+        page_y_offset = self.page_positions[self.current_page]
+        
+        # Check if click is on any link
+        for link in self.links_on_page[self.current_page]:
+            rect = link['rect']
+            # rect is (x0, y0, x1, y1) in PDF coordinates
+            # Need to adjust for page offset
+            if rect[0] <= canvas_x <= rect[2] and (page_y_offset + rect[1]) <= canvas_y <= (page_y_offset + rect[3]):
+                if link['type'] == 'external':
+                    try:
+                        webbrowser.open(link['uri'])
+                    except:
+                        pass
+                elif link['type'] == 'internal':
+                    self.current_page = link['page']
+                    self.page_label.config(state='normal')
+                    self.page_label.delete(0, tk.END)
+                    self.page_label.insert(0, str(self.current_page + 1))
+                    self.page_label.config(state='readonly')
+                    self.render_current_page()
+                    self.canvas.yview_moveto(0)
+                return
+    
+    def _show_password_input_widget(self):
+        """Show password dialog for password-protected PDF"""
+        # Don't show dialog if application is closing
+        if self.is_closing:
+            return
+        
+        # Show the password input dialog
+        password, accepted = show_password_dialog(
+            self.password_attempt_count + 1,
+            self.max_password_attempts
+        )
+        
+        if accepted and password is not None:
+            # User entered password and clicked Open
+            self._try_open_with_password(password)
+        else:
+            # User cancelled
+            self._cancel_password_input()
+    
+    def _try_open_with_password(self, password):
+        """Try to open the pending PDF with the provided password"""
+        if not self.pending_filepath:
+            return
+        
+        try:
+            self.doc = fitz.open(self.pending_filepath)
+            
+            # Authenticate with the password
+            authenticated = self.doc.authenticate(password)
+            
+            if not authenticated:
+                raise Exception("Authentication failed - incorrect password")
+            
+            # Try to access document metadata to validate password worked
+            try:
+                page_count = self.doc.page_count
+            except Exception as e:
+                raise Exception(f"Failed to access document: {e}")
+            
+            # Success! Load the PDF
+            self.total_pages = self.doc.page_count
+            self.current_page = 0
+            self.current_filepath = self.pending_filepath
+            self.pending_filepath = None
+            self.password_attempt_count = 0
+            
+            # Reset navigation state
+            self.last_navigation_page = -1
+            self.scroll_direction = None
+            
+            # Clear rendering cache
+            self.page_images.clear()
+            self.page_positions.clear()
+            self.current_photo_images.clear()
+            
+            # Set zoom to 100% by default
+            self.zoom_factor = 1.0
+            
+            # Update zoom input field with default zoom
+            self.zoom_input.config(state='normal')
+            self.zoom_input.delete(0, tk.END)
+            self.zoom_input.insert(0, "100")
+            self.zoom_input.config(state='readonly')
+            
+            # Update page number display
+            self.page_label.config(state='normal')
+            self.page_label.delete(0, tk.END)
+            self.page_label.insert(0, "1")
+            self.page_label.config(state='readonly')
+            
+            self.page_total.config(text=str(self.total_pages))
+            
+            # Update status bar with file info
+            zoom_text = f"Zoom: {int(self.zoom_factor * 100)}%"
+            self.status_bar.set_file_info(self.current_filepath, zoom_text)
+            
+            # Render pages starting from page 0
+            self.render_current_page()
+            
+            # Scroll to top after rendering
+            self.canvas.yview_moveto(0)
+            
+            # Hide password widget
+            self._hide_password_input_widget()
+            
+        except Exception as e:
+            self.password_attempt_count += 1
+            
+            if self.password_attempt_count >= self.max_password_attempts:
+                # Too many attempts - close the tab or go back
+                self._close_tab_on_password_failure()
+            else:
+                # Show error and refresh the widget
+                remaining = self.max_password_attempts - self.password_attempt_count
+                error_msg = f"Incorrect password ({remaining} attempts remaining)"
+                self._update_password_widget_message(error_msg)
+    
+    def _update_password_widget_message(self, error_msg):
+        """Update the password widget with an error message and show dialog again"""
+        # Simply show the password dialog again, which will display the updated attempt counter
+        self._show_password_input_widget()
+    
+    def _hide_password_input_widget(self):
+        """Hide the password input widget (cleanup method)"""
+        # No longer needed since we use dialogs, but keep for compatibility
+        if self.password_input_widget:
+            self.password_input_widget.destroy()
+            self.password_input_widget = None
+    
+    def _cancel_password_input(self):
+        """Cancel password input and reset"""
+        self.pending_filepath = None
+        self.password_attempt_count = 0
+        self._hide_password_input_widget()
+        self.status_bar.set_status("Password entry cancelled")
+    
+    def _close_tab_on_password_failure(self):
+        """Close the current tab or go back after max password attempts"""
+        self._hide_password_input_widget()
+        show_error_dialog(
+            "Password Failed",
+            f"Maximum password attempts ({self.max_password_attempts}) exceeded.\nTab will be closed."
+        )
+        
+        # Reset state
+        self.pending_filepath = None
+        self.password_attempt_count = 0
+        
+        # Try to close the tab through the parent
+        if hasattr(self.parent, '_close_current_tab'):
+            self.parent._close_current_tab()
+        else:
+            # Fallback: just clear the reader
+            if self.doc:
+                self.doc.close()
+                self.doc = None
+            self.canvas.delete('all')
+            self.status_bar.set_status("Password attempt limit reached")
+    
     def load_pdf(self, filepath):
-        """Load PDF file"""
+        """Load PDF file with password support"""
+        # Don't load if closing
+        if self.is_closing:
+            return False
+        
         try:
             if self.doc:
                 self.doc.close()
+                self.doc = None
             
-            self.doc = fitz.open(filepath)
+            # Try to open the PDF
+            try:
+                self.doc = fitz.open(filepath)
+            except Exception as e:
+                # Check if it's a password-protected PDF
+                error_str = str(e).lower()
+                
+                # Check for various password-related error messages
+                if "password" in error_str or "encrypted" in error_str or "needs password" in error_str or "is encrypted" in error_str:
+                    # Show password input widget
+                    self.pending_filepath = filepath
+                    self.password_attempt_count = 0
+                    self._show_password_input_widget()
+                    return True
+                else:
+                    # Try to open as password-protected anyway, might need password
+                    try:
+                        self.doc = fitz.open(filepath, password="")
+                    except:
+                        # Definitely needs a password
+                        self.pending_filepath = filepath
+                        self.password_attempt_count = 0
+                        self._show_password_input_widget()
+                        return True
+                    raise
+            
+            # Check if PDF is encrypted (password-protected)
+            if self.doc.is_encrypted:
+                # Close the unencrypted handle and show password dialog
+                self.doc.close()
+                self.doc = None
+                self.pending_filepath = filepath
+                self.password_attempt_count = 0
+                self._show_password_input_widget()
+                return True
+            
+            # Successfully opened without password
             self.total_pages = self.doc.page_count
             self.current_page = 0
             self.current_filepath = filepath
+            self.pending_filepath = None
+            self.password_attempt_count = 0
             
             # Reset navigation state
             self.last_navigation_page = -1
@@ -256,15 +519,25 @@ class PDFReader(StyledFrame):
             
             # Scroll to top after rendering
             self.canvas.yview_moveto(0)
+            
+            return True
         
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load PDF: {str(e)}")
             self.status_bar.set_status("Error loading PDF")
+            self.pending_filepath = None
+            self.password_attempt_count = 0
+            self._hide_password_input_widget()
+            return False
     
     def render_current_page(self):
         """Render all pages continuously for seamless scrolling like Adobe DC"""
         if not self.doc or self.total_pages == 0:
             return
+        
+        # Extract links from all pages
+        for page_num in range(self.total_pages):
+            self._extract_links_for_page(page_num)
         
         # Clear previous rendering cache
         self.page_images.clear()

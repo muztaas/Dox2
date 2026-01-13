@@ -49,7 +49,7 @@ class WorkspaceTabs(StyledFrame):
         self.tabs_container = tk.Frame(self.tab_bar, bg=DARK_BLUE)
         self.tabs_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Add new tab button
+        # Add new tab button (opens PDF Reader by default)
         self.add_tab_btn = tk.Button(
             self.tab_bar,
             text="+ New Tab",
@@ -61,25 +61,13 @@ class WorkspaceTabs(StyledFrame):
             relief=tk.FLAT,
             padx=10,
             pady=8,
-            command=self._add_new_workspace_dialog
+            command=lambda: self._add_workspace("PDF Reader")
         )
         self.add_tab_btn.pack(side=tk.RIGHT, padx=5, pady=5)
         
         # Content area frame
         self.content_frame = tk.Frame(self, bg=WHITE)
         self.content_frame.pack(fill=tk.BOTH, expand=True)
-    
-    def _add_new_workspace_dialog(self):
-        """Show dialog to select module for new workspace"""
-        # Create popup menu
-        menu = tk.Menu(self.add_tab_btn, tearoff=False)
-        menu.add_command(label="PDF Reader", command=lambda: self._add_workspace("PDF Reader"))
-        menu.add_command(label="PDF Creator", command=lambda: self._add_workspace("PDF Creator"))
-        menu.add_command(label="PDF Merger", command=lambda: self._add_workspace("PDF Merger"))
-        menu.add_command(label="File Manager", command=lambda: self._add_workspace("File Manager"))
-        
-        # Display menu at button location
-        menu.post(self.add_tab_btn.winfo_rootx(), self.add_tab_btn.winfo_rooty() + self.add_tab_btn.winfo_height())
     
     def _add_workspace(self, module_type):
         """Add a new workspace tab with specified module"""
@@ -190,6 +178,11 @@ class WorkspaceTabs(StyledFrame):
         # Show selected frame
         self.workspaces[tab_id]['frame'].pack(fill=tk.BOTH, expand=True)
         self.current_tab_id = tab_id
+        
+        # If switching to a File Manager, refresh its custom folders
+        module = self.workspaces[tab_id]['module']
+        if hasattr(module, 'refresh_custom_folders'):
+            module.refresh_custom_folders()
         
         # Update button styling
         for tid in self.workspace_tabs:

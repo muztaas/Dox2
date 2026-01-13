@@ -13,7 +13,7 @@ from PyPDF2 import PdfMerger
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.ui_components import (
-    StyledFrame, StyledLabel, StyledButton, SectionFrame, StatusBar,
+    StyledFrame, StyledLabel, StyledButton, SectionFrame, StatusBar, ScrolledFrame,
     show_info_dialog, show_error_dialog,
     LIGHT_BLUE, DARK_BLUE, WHITE, DARK_GRAY
 )
@@ -30,9 +30,10 @@ class PDFMerger(StyledFrame):
     
     def _setup_ui(self):
         """Setup UI components"""
-        # Main container
-        main_frame = StyledFrame(self)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Use ScrolledFrame for proper scrolling
+        scrolled = ScrolledFrame(self)
+        scrolled.pack(fill=tk.BOTH, expand=True)
+        main_frame = scrolled.scrollable_frame
         
         # ---- PDF Selection Section ----
         selection_section = SectionFrame(main_frame, title="Select PDFs to Merge")
